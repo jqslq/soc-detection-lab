@@ -1,0 +1,62 @@
+[
+  {
+    "rule": "brute_force",
+    "severity": "high",
+    "timestamp": "2026-10-15T09:00:48Z",
+    "src_ip": "198.51.100.23",
+    "username": "admin",
+    "count": 5,
+    "description": "Repeated failures targeting one account",
+    "mitre_attack": "T1110.001"
+  },
+  {
+    "rule": "success_after_failures",
+    "severity": "critical",
+    "timestamp": "2026-10-15T09:01:20Z",
+    "src_ip": "198.51.100.23",
+    "username": "admin",
+    "count": 6,
+    "description": "Successful login following repeated failures",
+    "mitre_attack": "T1110.001"
+  },
+  {
+    "rule": "password_spraying",
+    "severity": "medium",
+    "timestamp": "2026-10-15T10:30:30Z",
+    "src_ip": "203.0.113.44",
+    "username": "*",
+    "count": 3,
+    "description": "Failures against multiple distinct accounts",
+    "mitre_attack": "T1110.003"
+  },
+  {
+    "rule": "brute_force",
+    "severity": "high",
+    "timestamp": "2026-10-15T12:00:48Z",
+    "src_ip": "198.51.100.77",
+    "username": "root",
+    "count": 5,
+    "description": "Repeated failures targeting one account",
+    "mitre_attack": "T1110.001"
+  },
+  {
+    "rule": "success_after_failures",
+    "severity": "critical",
+    "timestamp": "2026-10-15T12:01:20Z",
+    "src_ip": "198.51.100.77",
+    "username": "root",
+    "count": 6,
+    "description": "Successful login following repeated failures",
+    "mitre_attack": "T1110.001"
+  },
+  {
+    "rule": "password_spraying",
+    "severity": "medium",
+    "timestamp": "2026-10-15T13:30:30Z",
+    "src_ip": "203.0.113.88",
+    "username": "*",
+    "count": 3,
+    "description": "Failures against multiple distinct accounts",
+    "mitre_attack": "T1110.003"
+  }
+]
