@@ -1,134 +1,171 @@
 # SOC Threat Detection Lab
 
-A Python-based **Blue Team / SOC portfolio project** for detecting suspicious authentication patterns, investigating alerts, and recording analyst triage decisions. The project uses **synthetic logs** and runs locally; it is not a production SIEM.
+A Python-based **Blue Team / SOC portfolio project** for detecting suspicious authentication patterns, analyzing Windows Security Event XML, investigating alerts, and documenting analyst triage decisions.
+
+The project runs locally and uses **synthetic demonstration datasets**. It is an educational batch-analysis tool, **not a production SIEM** or a continuous monitoring service.
 
 ## Dashboard previews
 
-### 1. Security Overview
+### Security Overview
 
-Overview of security alerts, severity metrics, and filtering capabilities.
+Severity metrics, detection-rule filters, source IP and account filtering, and attack statistics.
 
 ![Security Overview](screenshots/security_overview.png)
 
-### 2. Security Alerts and Visualization
+### Security Alerts and Visualization
 
-Detection results, alert tables, and attack statistics.
+Alert tables and visual summaries of detected authentication patterns.
 
 ![Security Alerts](screenshots/security_overview_with_alerts.png)
 
-### 3. Incident Investigation
+### Incident Investigation
 
-Attack timeline, raw authentication events, and analyst investigation.
+Investigation details, raw-event timeline, and analyst triage workflow.
 
 ![Incident Investigation](screenshots/incident_investigation.png)
+
+### Windows Security Overview (Event IDs 4624, 4625, 4740)
+
+Windows Events data source displaying detection results, source event IDs, and severity metrics from the bundled training XML.
+
+![Windows Security Overview](screenshots/windows_security_overview.png)
+
+### Windows Incident Investigation
+
+Windows account-lockout investigation with Event ID 4740, related source details, and the raw-event timeline.
+
+![Windows Incident Investigation](screenshots/windows_incident_investigation.png)
 
 
 ## Features
 
-- **Authentication log analysis:** read newline-delimited JSON (JSONL), validate records, and correlate activity by source IP and account.
-- **Threat detection:** identify repeated login failures, possible password spraying, and successful sign-in after repeated failures.
-- **Severity-based triage:** generate alerts with source IP, affected username, timestamp, priority, and MITRE ATT&CK mapping.
-- **Interactive Streamlit dashboard:** filter alerts by severity, detection rule, source IP, username, and UTC date range.
-- **Investigation workflow:** view matching raw authentication events in a chronological attack timeline.
-- **Analyst verdicts:** record `Needs Investigation`, `True Positive`, or `False Positive` decisions and notes in a local JSON file.
-- **Export and testing:** export filtered alerts and run automated detection tests.
+- **Authentication detection:** analyze newline-delimited JSON (JSONL) logs and detect repeated failures, possible password spraying, and successes after failures.
+- **Windows Security Event XML ingestion:** parse Event IDs **4624** (successful logon), **4625** (failed logon), and **4740** (account locked out).
+- **Safe normalization:** retain event timestamps, usernames, logon types, available source IPs, and workstation information. Events without a reliable IP are not merged into one fictitious source.
+- **Correlation and alert triage:** generate severity-tagged alerts with MITRE ATT&CK mapping where justified.
+- **Source Event IDs:** attach relevant Windows event types to correlation alerts; source record identifiers are available when present in the input XML. The linked records for correlation alerts are **investigation candidates**, not an exact proof of which records triggered a rule.
+- **Interactive Streamlit Dashboard:** choose between *Synthetic demo* and *Windows Events* data sources, filter alerts by severity, rule, IP, account, and UTC date range, and export filtered results.
+- **Incident Investigation:** inspect alert details and a timeline of related raw events. The restored v2.0 version displays account-lockout events separately; it does not assert that specific prior failures caused a lockout.
+- **Analyst Verdict:** save `Needs Investigation`, `True Positive`, or `False Positive` and supporting notes locally.
+- **Tests:** run automated checks for the original detection logic and Windows XML handling.
 
 ## Architecture
 
 ```text
-Synthetic authentication events (JSONL)
-        |
-        v
-   detector.py  -->  reports/alerts.json
-                          |
-                          v
-                    dashboard.py
-                      |      |
-                      |      +--> Raw event investigation <-- data/generated_auth.jsonl
-                      |
-                      +--> Analyst decisions --> reports/analyst_verdicts.json
+Synthetic JSONL logs                         Windows Security XML
+(data/generated_auth.jsonl)                 (data/sample_windows_events.xml)
+           |                                           |
+           v                                           v
+       detector.py                         windows_event_analyzer.py
+           |                                |                   |
+           v                                v                   v
+ reports/alerts.json                Normalized JSONL     reports/windows_alerts.json
+           |                                |                   |
+           +--------------------------------+-------------------+
+                                            |
+                                            v
+                                        dashboard.py
+                                         |       |
+                                         |       +--> Raw-event investigation
+                                         +----------> Analyst verdicts (local JSON)
 ```
 
-The detector is a **batch-processing** script; the dashboard displays files produced by the detector rather than continuously streaming live events.
+The analyzers operate in **batch mode**. The dashboard reads reports and raw-event files; it does not collect live events itself.
 
 ## Detection rules
 
 | Detection | Example signal | Demo severity | MITRE ATT&CK |
-|---|---|---|---|
-| Brute force | At least 5 failed logins targeting one account from one IP within 5 minutes | High | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) |
-| Password spraying (heuristic) | Failures targeting at least 3 distinct usernames from one IP within 5 minutes | Medium | [T1110.003](https://attack.mitre.org/techniques/T1110/003/) |
-| Success after failures | Successful login following at least 5 failures for the same IP and username within 5 minutes | Critical | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) |
+| --- | --- | --- | --- |
+| Brute force | At least 5 failures for one account from the same IP within 5 minutes | High | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) |
+| Password spraying (heuristic) | Failed logins targeting at least 3 different usernames from the same IP within 5 minutes | Medium | [T1110.003](https://attack.mitre.org/techniques/T1110/003/) |
+| Success after failures | A successful login after at least 5 failures for the same IP and account within 5 minutes | Critical | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) |
+| Windows account lockout | Windows Event ID 4740 | Medium | Not assigned automatically |
 
-**Detection caveats:** a spraying alert is only a heuristic because passwords are not available in the logs. A successful login after failures is suspicious but does **not** prove account compromise. Severity reflects a sample triage priority, not confirmed incident impact.
+**Interpretation:** Password spraying is a heuristic because passwords are not visible in login logs. A successful login after repeated failures is suspicious but does not prove compromise. Event 4740 confirms a lockout, not the identity of the actor or its cause. Severity values are demonstration triage priorities.
+
+## Supported Windows Security Events
+
+| Event ID | Meaning | Handling |
+| --- | --- | --- |
+| 4624 | An account was successfully logged on | Normalize to `status=success` |
+| 4625 | An account failed to log on | Normalize to `status=failure` |
+| 4740 | A user account was locked out | Create an independent `account_lockout` alert |
+
+The Windows importer accepts **Windows Event XML**, wrapped in `<Events>...</Events>` or containing a single `<Event>`. It does **not** directly parse binary `.evtx` files. Events with unknown source IP remain in the normalized investigation data, but are excluded from the existing IP-based authentication detector to avoid false grouping.
 
 ## Technology stack
 
 - Python 3
-- Streamlit (web dashboard)
-- Pandas (tables, filtering, timestamps)
-- JSON / JSONL (logs, alerts, local analyst decisions)
-- `unittest` (automated detector checks)
+- Streamlit
+- Pandas
+- JSON / JSONL / XML
+- Python `unittest`
 
 ## Quick start (Windows PowerShell)
 
-Open a terminal in the project root. Install dependencies:
+Open a terminal in the project root and install dependencies:
 
 ```powershell
 py -3 -m pip install -r requirements.txt
 ```
 
-Generate a reproducible synthetic authentication dataset:
+### Option A — Synthetic authentication dataset
 
 ```powershell
 py -3 generate_logs.py
-```
-
-Run the detection engine against the generated dataset:
-
-```powershell
 py -3 detector.py --input data/generated_auth.jsonl --output reports/alerts.json
-```
-
-Launch the dashboard:
-
-```powershell
 py -3 -m streamlit run dashboard.py
 ```
 
-Open the local URL provided by Streamlit, usually `http://localhost:8501`.
+Select **Synthetic demo** in the Dashboard sidebar. The generator produces a reproducible training dataset with normal authentication activity and attack-like sequences.
 
-Alternatively, to use the smaller bundled sample dataset:
+### Option B — Bundled Windows Event XML sample
 
 ```powershell
-py -3 detector.py --input data/sample_auth.jsonl --output reports/alerts.json
+py -3 windows_event_analyzer.py --input data/sample_windows_events.xml
+py -3 -m streamlit run dashboard.py
 ```
 
-**Important:** the investigation timeline currently reads `data/generated_auth.jsonl`. To investigate matching raw events, generate the dataset and run the detector against **that same file**, rather than `sample_auth.jsonl`.
+Select **Windows Events** in the sidebar. With the supplied training sample, the expected result is **12 normalized Windows events**, **10 authentication events with known IPs**, and **4 alerts**. Results depend on the sample and version in use.
 
-## Input format
+> Run the matching analyzer **before** launching or refreshing the Dashboard. For a meaningful investigation timeline, the alert report and raw-event file must come from the same dataset.
 
-The engine accepts one JSON event per line. Required fields:
+### Running on locally exported Windows logs
+
+The importer can analyze a locally prepared Windows Security XML export:
+
+```powershell
+py -3 windows_event_analyzer.py --input data/windows_events.xml
+```
+
+**Do not commit real Windows logs.** Local Security logs often contain service or interactive logons without a source IP. In such a case, **zero detections are expected** under the current IP-based rules and do not imply that the importer failed. The current Dashboard focuses on alerts and may show a “No security alerts detected” message for an empty report.
+
+## Input format — JSONL
+
+Each line contains a complete JSON authentication event:
 
 ```json
 {"timestamp":"2026-10-15T09:00:00Z","src_ip":"198.51.100.23","username":"admin","status":"failure"}
 ```
 
-- `timestamp`: ISO 8601 with timezone
+Required fields:
+
+- `timestamp`: ISO 8601 timestamp with timezone
 - `src_ip`: source IP address
-- `username`: attempted account name
+- `username`: target account
 - `status`: `failure` or `success`
 
-Example IP addresses belong to documentation-only ranges.
+Example IP addresses are documentation-only addresses.
 
-## Investigating an alert
+## Investigation workflow
 
-1. Open **Incident Investigation** in the dashboard.
-2. Select a suspicious alert (for example, `success_after_failures`).
-3. Review the source IP, account, severity, MITRE mapping, and the related raw events timeline.
-4. Examine whether failures were followed by a successful sign-in and whether other accounts were targeted.
-5. Record an analyst verdict and supporting notes. The dashboard saves decisions in `reports/analyst_verdicts.json`.
+1. Start the Dashboard and select the correct **Data Source**.
+2. Open **Incident Investigation** and select an alert.
+3. Review rule, severity, account, IP (if known), and MITRE ATT&CK details.
+4. Examine raw events in the surrounding time window. For Windows events, inspect Event IDs and Logon Type if provided.
+5. Record a verdict and notes using **Save Verdict**.
 
-Verdicts are a **local training exercise**; they are not an automated remediation or verification of a real security incident.
+Verdicts are stored locally in `reports/analyst_verdicts.json`. They are educational analyst decisions, not evidence of confirmed compromise or automated remediation.
 
 ## Automated tests
 
@@ -136,7 +173,7 @@ Verdicts are a **local training exercise**; they are not an automated remediatio
 py -3 -m unittest discover -s tests -v
 ```
 
-The current suite covers benign authentication activity, validation of missing required fields, and detection of the three sample scenarios.
+The existing suite contains detector checks (including benign activity and invalid records) and Windows event analyzer checks. The current project previously passed **6 tests**; always rerun them after modifications.
 
 ## Project layout
 
@@ -145,31 +182,36 @@ soc-threat-detection-lab/
 ├── data/
 │   ├── benign_auth.jsonl
 │   ├── sample_auth.jsonl
-│   └── generated_auth.jsonl       # created by generate_logs.py
+│   ├── generated_auth.jsonl
+│   └── sample_windows_events.xml
 ├── reports/
-│   ├── alerts.json                # detector output
-│   └── analyst_verdicts.json      # local; exclude from Git
+│   └── alerts.json
 ├── screenshots/
-│   ├── security-overview.png
-│   └── incident-investigation.png
+│   ├── security_overview.png
+│   ├── security_overview_with_alerts.png
+│   └── incident_investigation.png
 ├── tests/
-│   └── test_detector.py
+│   ├── test_detector.py
+│   └── test_windows_event_analyzer.py
 ├── dashboard.py
 ├── detector.py
 ├── generate_logs.py
+├── windows_event_analyzer.py
 ├── requirements.txt
 ├── .gitignore
 └── README.md
 ```
 
-## Limitations and future improvements
+Generated local outputs include `data/windows_events_normalized.jsonl`, `data/windows_auth.jsonl`, `reports/windows_alerts.json`, and `reports/analyst_verdicts.json`. These are not required as public files: sample inputs and commands can regenerate the analysis results.
 
-- Synthetic data, not a live production log pipeline.
-- Static detection thresholds and simplified correlation can produce false positives or miss attacks.
-- The timeline reads a predefined generated log path rather than dynamically tracking the detector input.
-- Local JSON verdict persistence is suitable for a demo, not for multi-user environments.
-- Next steps: parse Windows Security Events (4624/4625), add edge-case tests, support configurable rules, and explore Splunk or another SIEM integration.
+## Limitations and future work
+
+- Demo datasets and a batch-processing architecture, not live SOC telemetry.
+- Fixed thresholds and approximate alert-to-record associations can produce false positives and missed attacks.
+- Missing source IP addresses are not eligible for existing IP-based correlation rules.
+- Local JSON verdict storage is not designed for multiple users or concurrent edits.
+- Potential next steps: configurable rules, exact evidence provenance in the detector, CI testing, and optional Splunk integration.
 
 ## Responsible use
 
-This is a defensive, educational project. No real accounts, credentials, private logs, or sensitive incident notes should be committed to the repository.
+This is a defensive educational project. Use test or properly authorized data only. Never commit credentials, actual user activity logs, workstation identifiers, or sensitive incident notes to a public repository.

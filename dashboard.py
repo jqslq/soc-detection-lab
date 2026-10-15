@@ -7,14 +7,23 @@ import pandas as pd
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
-ALERTS_FILE = ROOT / 'reports' / 'alerts.json'
-EVENTS_FILE = ROOT / 'data' / 'generated_auth.jsonl'
+DATA_SOURCES = {
+    'Synthetic demo': (ROOT / 'reports' / 'alerts.json', ROOT / 'data' / 'generated_auth.jsonl'),
+    'Windows Events': (ROOT / 'reports' / 'windows_alerts.json', ROOT / 'data' / 'windows_events_normalized.jsonl'),
+}
+
 VERDICTS_FILE = ROOT / 'reports' / 'analyst_verdicts.json'
 VERDICTS = ['Needs Investigation', 'True Positive', 'False Positive']
 
 st.set_page_config(page_title='SOC Threat Detection', page_icon='🛡️', layout='wide')
 st.title('🛡️ SOC Threat Detection Dashboard')
-st.caption('Security Monitoring | Threat Detection | MITRE ATT&CK | Synthetic demo data')
+available_sources = [name for name, (alerts_file, _) in DATA_SOURCES.items() if alerts_file.exists()]
+if not available_sources:
+    st.error('No alert reports found. Run detector.py or windows_event_analyzer.py first.')
+    st.stop()
+source_name = st.sidebar.selectbox('Data Source', available_sources)
+ALERTS_FILE, EVENTS_FILE = DATA_SOURCES[source_name]
+st.caption(f'Security Monitoring | Threat Detection | MITRE ATT&CK | {source_name}')
 
 
 def read_json(path, default):
@@ -34,7 +43,7 @@ def alert_key(alert):
 
 
 if not ALERTS_FILE.exists():
-    st.error('Missing reports/alerts.json. Run detector.py first.')
+    st.error(f'Missing {ALERTS_FILE.name}. Run the corresponding analyzer first.')
     st.stop()
 
 alerts = read_json(ALERTS_FILE, [])
@@ -92,7 +101,14 @@ with overview:
     if view.empty:
         st.warning('No alerts match the selected filters.')
     else:
-        st.dataframe(view.sort_values('timestamp'), use_container_width=True, hide_index=True)
+        display_view = view.sort_values('timestamp').copy()
+        if 'source_event_ids' in display_view.columns:
+            display_view['source_event_ids'] = display_view['source_event_ids'].apply(
+                lambda ids: ', '.join(map(str, ids)) if isinstance(ids, list) else '')
+        if 'source_record_ids' in display_view.columns:
+            display_view['source_record_ids'] = display_view['source_record_ids'].apply(
+                lambda ids: ', '.join(map(str, ids)) if isinstance(ids, list) else '')
+        st.dataframe(display_view, use_container_width=True, hide_index=True)
         a, b = st.columns(2)
         with a:
             st.subheader('Alerts by Severity')
@@ -127,10 +143,16 @@ with investigation:
         st.write('**Rule:**', selected['rule'])
         st.write('**Description:**', selected.get('description', '—'))
         st.write('**MITRE ATT&CK:**', selected.get('mitre_attack', '—'))
+        source_ids = selected.get('source_event_ids', [])
+        if isinstance(source_ids, list):
+            st.write('**Source Event IDs:**', ', '.join(map(str, source_ids)) or '—')
+        source_records = selected.get('source_record_ids', [])
+        if isinstance(source_records, list) and source_records:
+            st.write('**Source Record IDs:**', ', '.join(map(str, source_records)))
 
         st.subheader('Attack Timeline (Raw Events)')
         if not EVENTS_FILE.exists():
-            st.warning('data/generated_auth.jsonl not found. Run generate_logs.py first.')
+            st.warning(f'{EVENTS_FILE.name} not found. Generate or import matching events first.')
         else:
             try:
                 with EVENTS_FILE.open('r', encoding='utf-8') as file:
@@ -144,21 +166,28 @@ with investigation:
                     raw['timestamp'] = pd.to_datetime(raw['timestamp'], utc=True, errors='coerce')
                     moment = selected['timestamp']
                     # Correlation detector default is 5 minutes; 1 minute after shows follow-up activity.
-                    timeline = raw[(raw['src_ip'] == selected['src_ip']) &
-                                   (raw['timestamp'] >= moment - timedelta(minutes=5)) &
+                    timeline = raw[(raw['timestamp'] >= moment - timedelta(minutes=5)) &
                                    (raw['timestamp'] <= moment + timedelta(minutes=1))].copy()
-                    if selected['rule'] != 'password_spraying':
-                        timeline = timeline[timeline['username'] == selected['username']]
+                    if selected['rule'] == 'account_lockout':
+                        # Event 4740 does not provide a reliable source IP.
+                        timeline = timeline[(timeline['username'] == selected['username']) &
+                                            (timeline['status'] == 'locked')]
+                    else:
+                        timeline = timeline[timeline['src_ip'] == selected['src_ip']]
+                        if selected['rule'] != 'password_spraying':
+                            timeline = timeline[timeline['username'] == selected['username']]
                     timeline = timeline.sort_values('timestamp')
                     if timeline.empty:
-                        st.warning('No matching events in the selected time window. Check whether alerts.json and generated_auth.jsonl came from the same detector run.')
+                        st.warning('No matching events. Make sure the alerts and raw events are from the same data source.')
                     else:
-                        st.caption('Time window: 5 min before to 1 min after the alert (UTC). Matching IP; account-specific rules also match username.')
-                        st.dataframe(timeline[['timestamp', 'src_ip', 'username', 'status']], hide_index=True, use_container_width=True)
+                        st.caption('Time window: 5 min before to 1 min after the alert (UTC). Lockout alerts match by username; other rules match by IP.')
+                        columns = [c for c in ['timestamp', 'event_id', 'src_ip', 'username', 'status', 'logon_type', 'workstation'] if c in timeline.columns]
+                        st.dataframe(timeline[columns], hide_index=True, use_container_width=True)
                         events_chart = timeline.assign(failure=(timeline['status'] == 'failure').astype(int),
-                                                       success=(timeline['status'] == 'success').astype(int))
-                        st.bar_chart(events_chart.set_index('timestamp')[['failure', 'success']])
-                        st.write(f"**Failures:** {int((timeline['status'] == 'failure').sum())} | **Successes:** {int((timeline['status'] == 'success').sum())}")
+                                                       success=(timeline['status'] == 'success').astype(int),
+                                                       locked=(timeline['status'] == 'locked').astype(int))
+                        st.bar_chart(events_chart.set_index('timestamp')[['failure', 'success', 'locked']])
+                        st.write(f"**Failures:** {int((timeline['status'] == 'failure').sum())} | **Successes:** {int((timeline['status'] == 'success').sum())} | **Lockouts:** {int((timeline['status'] == 'locked').sum())}")
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 st.error(f'Cannot load raw logs: {error}')
 
